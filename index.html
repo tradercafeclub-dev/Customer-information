@@ -2983,6 +2983,7 @@ function buildYourTeamCommission(){
   <div style="border-top:2px solid var(--border);padding-top:16px;margin-bottom:10px;">
     <div class="noco-title" style="font-size:1.05rem;margin-bottom:14px;">💰 ค่าคอมมิชั่นทีม (Commission Dashboard)</div>
   </div>
+  
 <div>
   <div class="page-title"><h1>💰 ค่าคอมมิชั่นทีม</h1><p>สรุปค่าคอมมิชั่นรายทีมแยกตามเดือน</p></div>
 
@@ -4932,8 +4933,7 @@ async function ensurePageContentTable(){
       headers:{'xc-token':NOCO.token,'Content-Type':'application/json'},
       body:JSON.stringify({ title:'pagecontent', columns:[
         {title:'PageKey',      uidt:'SingleLineText'},
-        {title:'HtmlContent',  uidt:'LongText'},
-        {title:'UpdatedAt',    uidt:'SingleLineText'}
+        {title:'HtmlContent',  uidt:'LongText'}
       ]})
     });
     if(!r.ok) throw new Error('create table failed');
@@ -5245,33 +5245,53 @@ async function _pcSaveHtml(key, html, msg){
   try{
     if(!NOCO.tbl.pagecontent) await ensurePageContentTable();
     if(!NOCO.tbl.pagecontent) throw new Error('ไม่สามารถสร้างตาราง pagecontent ได้');
-    const now=new Date().toLocaleString('th-TH',{timeZone:'Asia/Bangkok'});
     const cached=_pcDataCache[key];
-    let ok=false;
-    if(cached&&cached.id){
+    let ok=false, savedId=cached?.id;
+
+    if(cached && cached.id){
+      // UPDATE — ส่งเฉพาะ HtmlContent (UpdatedAt เป็น system field ของ NocoDB)
       const r=await fetch(`${NOCO.base}/api/v1/db/data/noco/${NOCO.proj}/${NOCO.tbl.pagecontent}/${cached.id}`,{
-        method:'PATCH',headers:{'xc-token':NOCO.token,'Content-Type':'application/json'},
-        body:JSON.stringify({HtmlContent:html,UpdatedAt:now})
+        method:'PATCH',
+        headers:{'xc-token':NOCO.token,'Content-Type':'application/json'},
+        body:JSON.stringify({HtmlContent:html})
       });
-      ok=r.ok;
+      if(!r.ok){
+        const errText=await r.text().catch(()=>'');
+        throw new Error(`PATCH ${r.status}: ${errText.substring(0,120)}`);
+      }
+      ok=true;
     }else{
+      // INSERT — สร้าง row ใหม่
       const r=await fetch(`${NOCO.base}/api/v1/db/data/noco/${NOCO.proj}/${NOCO.tbl.pagecontent}`,{
-        method:'POST',headers:{'xc-token':NOCO.token,'Content-Type':'application/json'},
-        body:JSON.stringify({PageKey:key,HtmlContent:html,UpdatedAt:now})
+        method:'POST',
+        headers:{'xc-token':NOCO.token,'Content-Type':'application/json'},
+        body:JSON.stringify({PageKey:key, HtmlContent:html})
       });
-      if(r.ok){const d=await r.json();_pcDataCache[key]={id:d.Id||d.id,HtmlContent:html,UpdatedAt:now};ok=true;}
+      if(!r.ok){
+        const errText=await r.text().catch(()=>'');
+        throw new Error(`POST ${r.status}: ${errText.substring(0,120)}`);
+      }
+      const d=await r.json();
+      savedId=d.Id||d.id||d.rowId;
+      _pcDataCache[key]={id:savedId, HtmlContent:html, UpdatedAt:''};
+      ok=true;
     }
+
     if(ok){
-      if(_pcDataCache[key]){_pcDataCache[key].HtmlContent=html;_pcDataCache[key].UpdatedAt=now;}
+      const now=new Date().toLocaleString('th-TH',{timeZone:'Asia/Bangkok'});
+      if(_pcDataCache[key]){
+        _pcDataCache[key].HtmlContent=html;
+        _pcDataCache[key].UpdatedAt=now;
+        if(savedId) _pcDataCache[key].id=savedId;
+      }
       CONTENT[key]=html;
       _pcApplyToPage(key,html);
       delete _cache[NOCO.tbl.pagecontent+''];
       if(msg) msg.innerHTML=`<span style="color:#22c55e;">✅ บันทึกสำเร็จ — ${now}</span>`;
       setTimeout(()=>pageContentRenderEditor(key),1400);
-    }else{
-      if(msg) msg.innerHTML='<span style="color:#f6465d;">❌ บันทึกไม่สำเร็จ</span>';
     }
   }catch(e){
+    console.error('_pcSaveHtml error:',e);
     if(msg) msg.innerHTML=`<span style="color:#f6465d;">❌ ${e.message}</span>`;
   }
 }
